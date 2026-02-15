@@ -1,0 +1,6 @@
+streamlit
+akshare
+pandas
+mplfinance
+pandas-ta
+matplotlib
