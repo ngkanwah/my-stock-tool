@@ -119,15 +119,42 @@ def generate_analysis(code):
 # --- 5. 接口与网页展示 ---
 params = st.query_params
 if params.get("mode") == "api":
-    f, d, n = generate_analysis(params.get("code", "001228"))
-    if d is not None:
-        # 关键：强制返回最新价格供 AI 提取
-        st.json({
-            "stock_name": n, 
-            "latest_realtime_price": float(d['Close'].iloc[-1]), 
-            "rps_strength": float(d['RPS'].iloc[-1]),
-            "server_time": str(datetime.datetime.now())
-        })
+    target_code = params.get("code", "001228")
+    fig, df_daily, stock_name = generate_analysis(target_code)
+    
+    if df_daily is not None:
+        # 1. 选取图中显示的 120 日数据计算区间极值
+        plot_d = df_daily.tail(120)
+        p_high = float(plot_d['High'].max())
+        p_low = float(plot_d['Low'].min())
+        
+        # 2. 提取最新指标数据
+        latest = df_daily.iloc[-1]
+        
+        # 3. 构造完整 API 返回体
+        api_response = {
+            "stock_info": {
+                "name": stock_name,
+                "code": target_code,
+                "latest_price": float(latest['Close']),
+                "change_percent": float(((latest['Close'] / df_daily['Close'].iloc[-2]) - 1) * 100)
+            },
+            "period_metrics": {
+                "desc": "基于图内 120 交易日数据",
+                "period_high": p_high,
+                "period_low": p_low,
+                "rps_strength": float(latest['RPS'])
+            },
+            "technical_indicators": {
+                "MA5": float(latest['MA5']),
+                "MA20": float(latest['MA20']),
+                "MA120": float(latest['MA120']),
+                "MACD_main": float([c for c in df_daily.columns if 'MACD_' in c and 's' not in c and 'h' not in c][0]),
+                "MACD_signal": float([c for c in df_daily.columns if 'MACDs_' in c][0])
+            },
+            "server_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        st.json(api_response)
     st.stop()
 
 st.title("📈 A股量化查询系统 (云端专业版)")
@@ -147,3 +174,4 @@ if btn:
                 st.download_button(f"💾 下载图片", buf.getvalue(), f"{name}.png")
             with c2:
                 st.download_button(f"📊 下载数据", data.to_csv().encode('utf-8-sig'), f"{name}.csv")
+
