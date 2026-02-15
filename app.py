@@ -9,7 +9,7 @@ import matplotlib.font_manager as fm
 import os
 import datetime
 
-# --- 1. 页面配置与字体 ---
+# --- 1. 页面与字体配置 ---
 st.set_page_config(page_title="A股量化深度全景-专业版", layout="wide")
 
 def get_font_prop():
@@ -25,18 +25,19 @@ def get_smart_name_map():
         return dict(zip(df_new['代码'], df_new['名称']))
     except: return {}
 
-# --- 2. 核心分析函数 ---
+# --- 2. 核心量化引擎 ---
 def generate_analysis(code):
     f_prop = get_font_prop()
     name_map = get_smart_name_map()
     stock_name = name_map.get(code, "未知股票")
     
     try:
+        # 获取日线(起自2024年初确保RPS计算)与分时
         df_d = ak.stock_zh_a_hist(symbol=code, period="daily", start_date="20240101", adjust="qfq")
         df_m = ak.stock_zh_a_hist_min_em(symbol=code, period='1', adjust="qfq")
         if df_d.empty or df_m.empty: return None, None, None
 
-        def clean(df, is_min=False):
+        def clean_df(df, is_min=False):
             t_col = '时间' if is_min else '日期'
             df = df[[t_col, '开盘', '最高', '最低', '收盘', '成交量']]
             df.columns = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
@@ -44,28 +45,29 @@ def generate_analysis(code):
             df.set_index('Date', inplace=True)
             return df.astype(float)
 
-        df_daily, df_min_raw = clean(df_d), clean(df_m, is_min=True)
+        df_daily, df_min_raw = clean_df(df_d), clean_df(df_m, is_min=True)
         df_min = df_min_raw[df_min_raw.index.date == df_min_raw.index.date[-1]]
         curr_date = df_min.index[-1].strftime('%Y-%m-%d')
         
-        # 指标计算
+        # 计算 6 条均线与 MACD
         for length in [5, 10, 20, 30, 60, 120]:
             df_daily[f'MA{length}'] = ta.sma(df_daily['Close'], length=length)
         df_daily = pd.concat([df_daily, ta.macd(df_daily['Close'])], axis=1)
         df_daily['RPS'] = (df_daily['Close'] / df_daily['Close'].shift(250)) * 100
         
+        # 截取最近 120 交易日(约半年)作为图表红框范围
         plot_d = df_daily.tail(120)
         
-        # 绘图设置
+        # 绘图逻辑
         mc = mpf.make_marketcolors(up='red', down='green', edge='inherit', wick='inherit', volume='in')
         fig = mpf.figure(style=mpf.make_mpf_style(marketcolors=mc, gridstyle='--'), figsize=(14, 25))
         fig.subplots_adjust(top=0.92, bottom=0.05, left=0.15, right=0.85)
-        fig.suptitle(f"{stock_name} ({code}) 量化报告", fontsize=24, fontweight='bold', y=0.98, fontproperties=f_prop)
+        fig.suptitle(f"{stock_name} ({code}) 量化深度报告", fontsize=24, fontweight='bold', y=0.98, fontproperties=f_prop)
         
         gs = gridspec.GridSpec(6, 1, height_ratios=[6, 2, 2, 2, 5, 2], hspace=0.35)
         axs = [fig.add_subplot(gs[i]) for i in range(6)]
         
-        # 获取 MACD 列名
+        # 指标列识别
         m_c = [c for c in df_daily.columns if 'MACD_' in c and 's' not in c and 'h' not in c][0]
         s_c = [c for c in df_daily.columns if 'MACDs_' in c][0]
         h_c = [c for c in df_daily.columns if 'MACDh_' in c][0]
@@ -80,32 +82,22 @@ def generate_analysis(code):
         mpf.plot(plot_d, type='candle', ax=axs[0], volume=axs[1], addplot=ap)
         mpf.plot(df_min, type='line', ax=axs[4], volume=axs[5])
 
-        # 均线数值标注
-        last_ma = plot_d.iloc[-1]
-        ma_label = (f"MA5:{last_ma['MA5']:.2f}  MA10:{last_ma['MA10']:.2f}  MA20:{last_ma['MA20']:.2f}  "
-                    f"MA30:{last_ma['MA30']:.2f}  MA60:{last_ma['MA60']:.2f}  MA120:{last_ma['MA120']:.2f}")
-        axs[0].text(0, 1.02, ma_label, transform=axs[0].transAxes, fontsize=10, color='blue', fontproperties=f_prop)
+        # 视觉标注：图中 120 日区间最值
+        p_high, p_low = float(plot_d['High'].max()), float(plot_d['Low'].min())
+        axs[0].text(1.02, 0.8, f"区间最高: {p_high:.2f}", transform=axs[0].transAxes, color='red', fontweight='bold', fontproperties=f_prop)
+        axs[0].text(1.02, 0.6, f"区间最低: {p_low:.2f}", transform=axs[0].transAxes, color='green', fontweight='bold', fontproperties=f_prop)
 
-        # 修改：计算图中 120 日（约半年）内的区间最高价和最低价
-        p_high = float(plot_d['High'].max())
-        p_low = float(plot_d['Low'].min())
-        axs[0].text(1.02, 0.8, f"区间最高: {p_high:.2f}", transform=axs[0].transAxes, color='red', fontproperties=f_prop)
-        axs[0].text(1.02, 0.6, f"区间最低: {p_low:.2f}", transform=axs[0].transAxes, color='green', fontproperties=f_prop)
-
-        # 分时图标注
-        m_o, m_c_val, m_h, m_l, y_c = df_daily['Open'].iloc[-1], df_min['Close'].iloc[-1], df_min['High'].max(), df_min['Low'].min(), df_daily['Close'].iloc[-2]
-        axs[4].text(1.02, 0.9, f"实时现价: {m_c_val:.2f}", transform=axs[4].transAxes, color='red', fontweight='bold', fontproperties=f_prop)
-        axs[4].text(1.02, 0.7, f"今日开盘: {m_o:.2f}", transform=axs[4].transAxes, color='black', fontproperties=f_prop)
-        axs[4].text(1.02, 0.5, f"昨收参考: {y_c:.2f}", transform=axs[4].transAxes, color='gray', fontproperties=f_prop)
-        axs[4].text(1.02, 0.3, f"今日最高: {m_h:.2f}", transform=axs[4].transAxes, color='orange', fontproperties=f_prop)
-        axs[4].text(1.02, 0.1, f"今日最低: {m_l:.2f}", transform=axs[4].transAxes, color='blue', fontproperties=f_prop)
+        # 均线与分时数值标注
+        last_d = df_daily.iloc[-1]
+        ma_txt = f"MA5:{last_d['MA5']:.2f} MA10:{last_d['MA10']:.2f} MA20:{last_d['MA20']:.2f} MA120:{last_d['MA120']:.2f}"
+        axs[0].text(0, 1.02, ma_txt, transform=axs[0].transAxes, color='blue', fontproperties=f_prop)
 
         return fig, df_daily, stock_name
     except Exception as e:
-        st.error(f"分析出错: {e}")
+        st.error(f"分析异常: {e}")
         return None, None, None
 
-# --- 3. 接口与网页展示 ---
+# --- 3. 深度 API 接口处理 ---
 params = st.query_params
 if params.get("mode") == "api":
     target_code = params.get("code", "001228")
@@ -113,51 +105,52 @@ if params.get("mode") == "api":
     
     if df_daily is not None:
         latest = df_daily.iloc[-1]
-        prev_close = df_daily['Close'].iloc[-2]
-        plot_d = df_daily.tail(120)
+        plot_120 = df_daily.tail(120)
         
-        # 识别指标列名
-        m_c = [c for c in df_daily.columns if 'MACD_' in c and 's' not in c and 'h' not in c][0]
-        s_c = [c for c in df_daily.columns if 'MACDs_' in c][0]
-        h_c = [c for c in df_daily.columns if 'MACDh_' in c][0]
+        # 提取 30 日 MACD 趋势序列
+        macd_c = [c for c in df_daily.columns if 'MACD_' in c and 's' not in c and 'h' not in c][0]
+        macds_c = [c for c in df_daily.columns if 'MACDs_' in c][0]
+        macdh_c = [c for c in df_daily.columns if 'MACDh_' in c][0]
+        
+        trend_30d = []
+        for idx, row in df_daily.tail(30).iterrows():
+            trend_30d.append({
+                "date": idx.strftime('%m-%d'),
+                "dif": round(float(row[macd_c]), 3),
+                "dea": round(float(row[macds_c]), 3),
+                "hist": round(float(row[macdh_c]), 3)
+            })
 
         st.json({
-            "base_info": {
-                "name": stock_name,
-                "code": target_code,
-                "server_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            },
+            "stock_info": {"name": stock_name, "code": target_code, "query_time": datetime.datetime.now().isoformat()},
             "price_action": {
                 "current": float(latest['Close']),
-                "change_pct": float(((latest['Close'] / prev_close) - 1) * 100),
-                "period_120d_high": float(plot_d['High'].max()),
-                "period_120d_low": float(plot_d['Low'].min()),
-                "today_high": float(latest['High']),
-                "today_low": float(latest['Low'])
+                "change_pct": round(float(((latest['Close']/df_daily['Close'].iloc[-2])-1)*100), 2),
+                "range_120d_high": float(plot_120['High'].max()),
+                "range_120d_low": float(plot_120['Low'].min())
+            },
+            "macd_trend_analysis": {
+                "description": "最近30个交易日序列数据",
+                "history": trend_30d
             },
             "technical_indicators": {
-                "rps_strength": float(latest['RPS']),
-                "ma_values": {
-                    "MA5": float(latest['MA5']), "MA10": float(latest['MA10']),
-                    "MA20": float(latest['MA20']), "MA60": float(latest['MA60']), "MA120": float(latest['MA120'])
-                },
-                "macd": {"dif": float(latest[m_c]), "dea": float(latest[s_c]), "hist": float(latest[h_c])}
+                "rps": round(float(latest['RPS']), 2),
+                "ma_values": {f"MA{l}": round(float(latest[f'MA{l}']), 2) for l in [5, 10, 20, 30, 60, 120]}
             },
-            "signals": {
+            "summary_signals": {
                 "above_ma120": bool(latest['Close'] > latest['MA120']),
-                "trend": "bullish" if latest['MA5'] > latest['MA20'] else "bearish"
+                "short_term_trend": "bullish" if latest['MA5'] > latest['MA20'] else "bearish"
             }
         })
     st.stop()
 
-# 网页端 UI
-st.title("📈 A股量化查询系统 (云端专业版)")
+# --- 4. 网页端 UI ---
+st.title("📈 A股量化深度查询系统 (API & 视觉全功能版)")
 with st.sidebar:
-    query_code = st.text_input("代码", value="000630")
-    btn = st.button("生成研报", type="primary")
-
-if btn:
-    with st.spinner("处理中..."):
-        fig, data, name = generate_analysis(query_code)
-        if fig:
-            st.pyplot(fig)
+    input_code = st.text_input("股票代码", value="000630")
+    if st.button("开始深度分析", type="primary"):
+        with st.spinner("正在获取实时数据并绘制量化图表..."):
+            fig, data, name = generate_analysis(input_code)
+            if fig:
+                st.pyplot(fig)
+                st.success(f"{name} 报告生成完毕")
