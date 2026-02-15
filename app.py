@@ -115,6 +115,7 @@ with st.sidebar:
     btn = st.button("生成报告", type="primary")
 
 if btn:
-    with st.spinner("查数中..."):
+    with st.spinner("查询中..."):
         fig, data, name = generate_analysis(query_code)
         if fig: st.pyplot(fig)
+
