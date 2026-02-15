@@ -14,14 +14,14 @@ from io import BytesIO
 # --- 1. 页面配置 ---
 st.set_page_config(page_title="A股量化深度全景-专业版", layout="wide")
 
-# --- 2. 字体注入 ---
+# --- 2. 字体注入 (解决乱码) ---
 def get_font_prop():
     font_paths = ['/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc', 'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simhei.ttf']
     for path in font_paths:
         if os.path.exists(path): return fm.FontProperties(fname=path)
     return None
 
-# --- 3. 30天缓存 ---
+# --- 3. 缓存机制 ---
 @st.cache_data(ttl=3600*24*30)
 def get_smart_name_map():
     cache_file = "stock_list_cache.csv"
@@ -34,13 +34,14 @@ def get_smart_name_map():
         return dict(zip(df_new['代码'], df_new['名称']))
     except: return {}
 
-# --- 4. 核心分析函数 ---
+# --- 4. 核心分析函数 (区间高低价修正版) ---
 def generate_analysis(code):
     f_prop = get_font_prop()
     name_map = get_smart_name_map()
     stock_name = name_map.get(code, "未知股票")
     
     try:
+        # 抓取数据
         df_d = ak.stock_zh_a_hist(symbol=code, period="daily", start_date="20240101", adjust="qfq")
         df_m = ak.stock_zh_a_hist_min_em(symbol=code, period='1', adjust="qfq")
         if df_d.empty or df_m.empty: return None, None, None
@@ -54,6 +55,7 @@ def generate_analysis(code):
             return df.astype(float)
 
         df_daily, df_min_raw = clean(df_d), clean(df_m, is_min=True)
+        # 过滤分时，只留当天
         df_min = df_min_raw[df_min_raw.index.date == df_min_raw.index.date[-1]]
         curr_date = df_min.index[-1].strftime('%Y-%m-%d')
         
@@ -64,6 +66,7 @@ def generate_analysis(code):
         df_daily = pd.concat([df_daily, ta.macd(df_daily['Close'])], axis=1)
         df_daily['RPS'] = (df_daily['Close'] / df_daily['Close'].shift(250)) * 100
         
+        # 截取图中显示的 120 天数据
         plot_d = df_daily.tail(120)
         m_c, s_c, h_c = [c for c in df_daily.columns if 'MACD_' in c and 's' not in c and 'h' not in c][0], [c for c in df_daily.columns if 'MACDs_' in c][0], [c for c in df_daily.columns if 'MACDh_' in c][0]
 
@@ -76,21 +79,4 @@ def generate_analysis(code):
         axs = [fig.add_subplot(gs[i]) for i in range(6)]
         
         ap = [
-            mpf.make_addplot(plot_d[['MA5', 'MA10', 'MA20', 'MA30', 'MA60', 'MA120']], ax=axs[0]),
-            mpf.make_addplot(plot_d[m_c], ax=axs[2], color='blue'),
-            mpf.make_addplot(plot_d[s_c], ax=axs[2], color='orange'),
-            mpf.make_addplot(plot_d[h_c], ax=axs[2], type='bar', color='gray', alpha=0.3),
-            mpf.make_addplot(plot_d['RPS'], ax=axs[3], color='purple')
-        ]
-        mpf.plot(plot_d, type='candle', ax=axs[0], volume=axs[1], addplot=ap)
-        mpf.plot(df_min, type='line', ax=axs[4], volume=axs[5])
-
-        # --- MA数值显示 ---
-        last_ma = plot_d.iloc[-1]
-        ma_label = (f"MA5:{last_ma['MA5']:.2f}  MA10:{last_ma['MA10']:.2f}  MA20:{last_ma['MA20']:.2f}  "
-                    f"MA30:{last_ma['MA30']:.2f}  MA60:{last_ma['MA60']:.2f}  MA120:{last_ma['MA120']:.2f}")
-        axs[0].text(0, 1.02, ma_label, transform=axs[0].transAxes, fontsize=10, color='blue', fontproperties=f_prop)
-
-        # --- 核心修改：日K线右侧改为区间最高/最低 (120天内) ---
-        period_high = plot_d['High'].max()  # 区间内最高
-        period_low = plot_d['Low'].min()    # 区间内
+            mpf.make_addplot(plot_d[['MA5', 'MA10',
