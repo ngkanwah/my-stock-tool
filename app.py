@@ -3,59 +3,65 @@ import akshare as ak
 import datetime
 import pandas as pd
 
-# --- [模块 1：业务逻辑] ---
-# <BEGIN: get_base_info_fast>
-def get_base_info_fast(code):
+# <BEGIN: 1. 全市场名称映射引擎>
+# [修改区] ttl 设置为 2592000 秒（即 30 天）
+@st.cache_data(ttl=3600*24*30)
+def get_full_market_map():
     """
-    使用更轻量的接口获取基础信息，增加错误处理
+    一次性抓取全 A 股名单并缓存 30 天
     """
     try:
-        # 改用单个股票的历史快照接口，速度比全市场扫描快得多
-        # 只需要抓取最近 1 天的数据来获取名称
-        df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date="20250101", adjust="qfq")
-        
-        # 获取名称通常需要从 spot 接口，如果全扫描太慢，我们尝试备用逻辑
-        # 这里先尝试获取一次
-        try:
-            name_data = ak.stock_individual_info_em(symbol=code)
-            stock_name = name_data[name_data['item'] == '股票名称']['value'].values[0]
-        except:
-            stock_name = "未知名称 (获取超时)"
-
-        return {
-            "status": "success",
-            "name": str(stock_name),
-            "code": str(code),
-            "query_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
+        # 抓取全市场实时快照数据
+        df = ak.stock_zh_a_spot_em()
+        # 建立 代码 -> 名称 的字典映射，方便极速查询
+        return dict(zip(df['代码'], df['名称']))
     except Exception as e:
-        return {"status": "error", "message": str(e)}
-# <END: get_base_info_fast>
+        # 如果抓取失败，返回空字典，防止程序崩溃
+        return {}
+# <END: 1. 全市场名称映射引擎>
 
+# <BEGIN: 2. 基础信息解析逻辑>
+def get_metadata(code, name_map):
+    """
+    1. 股票名称
+    2. 股票代码
+    3. 查询时间
+    """
+    code_str = str(code).zfill(6) # 自动补齐 6 位代码
+    stock_name = name_map.get(code_str, "未知股票")
+    
+    return {
+        "stock_name": stock_name,
+        "stock_code": code_str,
+        "query_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+# <END: 2. 基础信息解析逻辑>
 
-# --- [模块 2：逻辑控制与可视化调试] ---
-st.write("### 🔍 诊断面板")
+# --- API 逻辑处理 ---
 params = st.query_params
-st.write("当前收到参数:", params.to_dict())
-
 mode = params.get("mode")
-code = params.get("code")
+target_code = params.get("code")
 
-if mode == "api" and code:
-    with st.spinner('正在调取实时数据...'):
-        res = get_base_info_fast(code)
-        # 重点：先打印出来，再渲染 JSON，确保我们能看到数据
-        st.write("API 返回结果预览:", res)
-        st.json(res)
-    # 暂时注释掉 st.stop()，以便你能看到诊断面板
-    # st.stop() 
+# 预加载名称库
+name_map = get_full_market_map()
+
+if mode == "api" and target_code:
+    # 获取基础三项数据
+    metadata = get_metadata(target_code, name_map)
+    
+    # 纯 JSON 输出，供 Gemini 采集
+    st.json({
+        "metadata": metadata
+    })
+    st.stop()
+
+# --- 网页调试 UI ---
+st.title("🛡️ 稳定版 API 终端")
+if name_map:
+    st.success(f"✅ 全市场名单已就绪（缓存有效期：30天），共计 {len(name_map)} 只个股。")
 else:
-    st.warning("⚠️ 检测到未带参数或参数错误。")
-    st.info("请尝试访问：`?mode=api&code=000630` (请手动点击浏览器地址栏并在末尾粘贴)")
+    st.error("❌ 名单抓取失败，请检查网络或重新发布。")
 
-# 网页端手动测试
-st.divider()
-input_code = st.text_input("手动测试输入代码", value="000630")
-if st.button("立即抓取"):
-    data = get_base_info_fast(input_code)
-    st.write(data)
+test_code = st.text_input("测试代码", value="000630")
+if st.button("查看基础信息"):
+    st.write(get_metadata(test_code, name_map))
