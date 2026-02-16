@@ -31,9 +31,9 @@ def get_metadata(code, name_map):
     stock_name = name_map.get(code_str, "未知股票")
     
     return {
-        股票名称: stock_name,
-        股票代码: code_str,
-        查询时间: datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "股票名称": stock_name,
+        "股票代码": code_str,
+        "查询时间": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 # <END: 2. 基础信息解析逻辑>
 
@@ -110,5 +110,6 @@ else:
 test_code = st.text_input("测试代码", value="000630")
 if st.button("查看基础信息"):
     st.write(get_metadata(test_code, name_map))
+
 
 
