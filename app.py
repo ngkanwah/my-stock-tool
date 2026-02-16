@@ -31,11 +31,52 @@ def get_metadata(code, name_map):
     stock_name = name_map.get(code_str, "未知股票")
     
     return {
-        "股票名称": stock_name,
-        "股票代码": code_str,
-        "查询时间": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        股票名称: stock_name,
+        股票代码: code_str,
+        查询时间: datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 # <END: 2. 基础信息解析逻辑>
+
+# <BEGIN: 3. 实时行情与五档盘口逻辑>
+def get_realtime_quotes(code):
+    """
+    抓取目标：
+    1. 实时五价：现价、今开、最高、最低、昨收
+    2. L2 盘口：买1-5, 卖1-5 的价格与挂单量
+    """
+    try:
+        # 获取全市场快照（该接口包含所需的全部字段）
+        spot_df = ak.stock_zh_a_spot_em()
+        # 精确匹配代码
+        row = spot_df[spot_df['代码'] == str(code).zfill(6)]
+        
+        if row.empty:
+            return {"error": "未找到该股票的实时行情"}
+            
+        data = row.iloc[0]
+        
+        # 1. 提取实时五价
+        prices = {
+            "current": float(data['现价']),
+            "open": float(data['今开']),
+            "high": float(data['最高']),
+            "low": float(data['最低']),
+            "last_close": float(data['昨收'])
+        }
+        
+        # 2. 提取 L2 五档盘口
+        order_book = {
+            "bid": {f"b{i}": {"p": float(data[f'买{i}']), "v": int(data[f'买{i}量'])} for i in range(1, 6)},
+            "ask": {f"s{i}": {"p": float(data[f'卖{i}']), "v": int(data[f'卖{i}量'])} for i in range(1, 6)}
+        }
+        
+        return {
+            "prices": prices,
+            "order_book_l2": order_book
+        }
+    except Exception as e:
+        return {"error": f"实时数据抓取异常: {str(e)}"}
+# <END: 3. 实时行情与五档盘口逻辑>
 
 # --- API 逻辑处理 ---
 params = st.query_params
@@ -46,12 +87,16 @@ target_code = params.get("code")
 name_map = get_full_market_map()
 
 if mode == "api" and target_code:
-    # 获取基础三项数据
+    # 1. 获取第一部分的基础识别信息
     metadata = get_metadata(target_code, name_map)
     
-    # 纯 JSON 输出，供 Gemini 采集
+    # 2. 获取第二部分的实时全行情
+    realtime_quotes = get_realtime_quotes(target_code)
+    
+    # 3. 整合输出
     st.json({
-        "metadata": metadata
+        "metadata": metadata,
+        "realtime_data": realtime_quotes
     })
     st.stop()
 
@@ -65,4 +110,5 @@ else:
 test_code = st.text_input("测试代码", value="000630")
 if st.button("查看基础信息"):
     st.write(get_metadata(test_code, name_map))
+
 
